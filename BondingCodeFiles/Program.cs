@@ -8,24 +8,14 @@ using System.Text;
 
 namespace BondingCodeFiles
 {
-    class Program
+    partial class Program
     {
-
-        public class Options
-        {
-            [Option('i', "infile", Required = true, HelpText = "")]
-            public string sourcePath { get; set; }
-
-            [Option('o', "outfile", Required = true, HelpText = "")]
-            public string targetPath { get; set; }
-        }
-
         static async Task<int> Main(string[] args)
         {
             return await Parser.Default.ParseArguments<Options>(args)
                 .MapResult(async (Options opts) =>
                 {
-                    return Run(opts.sourcePath, opts.targetPath);
+                    return Run(opts.SourcePath, opts.TargetPath);
                 },
                 errs => Task.FromResult(-1)); // Invalid arguments
         }
@@ -40,52 +30,31 @@ namespace BondingCodeFiles
 
             string extensionPattern = "*.cs";
 
-            List<string> ignoreList = new List<string>()
+            List<string> ignoreList = GetIgnoreList().ToList();
+
+            List<string> files = Directory.GetFiles(sourcePath, extensionPattern, SearchOption.AllDirectories).ToList();
+
+            files.RemoveAll(file => ignoreList.Exists(ignoreItem => file.Contains(ignoreItem)));
+
+            using (StreamWriter streamWriter = new StreamWriter(targetPath))
+            {
+                ReportWriter reportWriter = new ReportWriter(streamWriter);
+                reportWriter.WriteFiles(files);
+            }
+
+            return 0;
+        }
+
+        private static IEnumerable<string> GetIgnoreList()
+        {
+            return new List<string>()
             {
                 "Debug",
                 "Properties",
                 "Designer",
                 "AssemblyAttributes"
             };
-
-            var files = Directory.GetFiles(sourcePath, extensionPattern, SearchOption.AllDirectories).ToList();
-
-            files.RemoveAll(file => ignoreList.Exists(ignore => file.Contains(ignore)));
-
-            WriteFiles(files, targetPath);
-
-            return 0;
         }
 
-        private static void WriteFiles(List<string> files, string outputPath)
-        {
-            var sb = new StringBuilder();
-
-            foreach (var s in files)
-            {
-                using (var sr = new StreamReader(s))
-                {
-
-                    var fileName = $"Файл \"{Path.GetFileName(s)}\"";
-                    var text = sr.ReadToEnd();
-
-                    sb.AppendLine(CreateTitle(fileName));
-                    sb.AppendLine(text);
-                }
-            }
-            
-            using (var sw = new StreamWriter(outputPath))
-            {
-                sw.WriteLine(sb.ToString());
-            }
-
-            
-        }
-
-        private static string CreateTitle(string titleText)
-        {
-            const string titleSeparator = "========";
-            return $"{titleSeparator} {titleText} {titleSeparator}";
-        }
     }
 }
