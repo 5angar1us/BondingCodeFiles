@@ -1,60 +1,112 @@
-﻿using CommandLine;
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using BondingCodeFiles.Report;
+using CommandLine;
+using Spectre.Console;
+using static BondingCodeFiles.Program;
 
-namespace BondingCodeFiles
+namespace BondingCodeFiles;
+
+class Program
 {
-    partial class Program
+    static async Task<int> Main(string[] args)
     {
-        static async Task<int> Main(string[] args)
+
+        if (args == null || args.Length == 0)
         {
-            return await Parser.Default.ParseArguments<Options>(args)
-                .MapResult(async (Options opts) =>
-                {
-                    return Run(opts.SourcePath, opts.TargetPath);
-                },
-                errs => Task.FromResult(-1)); // Invalid arguments
+            AnsiConsole.MarkupLine("[green]Интерактивный режим[/]");
+            string sourcePath = AnsiConsole.Ask<string>("Введите [blue]исходный путь[/]:");
+
+            string targetFileName = "all_code.odt";
+            string parentDirectory = Path.GetDirectoryName(sourcePath);
+            string defaultTargetPath = Path.Combine(parentDirectory, targetFileName);
+
+            string targetPath = AnsiConsole.Ask<string>("Введите [blue]целевой путь[/]:", defaultTargetPath);
+
+            return Run(new Options { SourcePath = sourcePath, TargetPath = targetPath, EmptyLineMode = EmptyLineMode.SingleEmpty});
         }
 
-        private static int Run(string sourcePath, string targetPath)
+        // Если аргументы переданы, используем CommandLine.Parser для парсинга
+        return await Parser.Default.ParseArguments<Options>(args)
+            .MapResult(async (Options opts) =>
+            {
+                return Run(opts);
+            },
+            errs => Task.FromResult(-1)); // Неверные аргументы
+    }
+
+
+    public static int Run(Options opts)
+    {
+        string sourcePath = opts.SourcePath;
+        string targetPath = opts.TargetPath;
+
+
+        if (!Directory.Exists(sourcePath))
         {
-            if (Directory.Exists(sourcePath) == false)
-            {
-                Console.WriteLine("This path does not exist");
-                return -1;
-            }
+            Console.WriteLine("Указанный исходный путь не существует");
+            return -1;
+        }
 
-            string extensionPattern = "*.cs";
+        // Получаем поддерживаемые расширения файлов
+        List<string> extensions = FileSource.GetSupportedExtensions();
 
-            List<string> ignoreList = GetIgnoreList().ToList();
+        // Получаем список игнорируемых директорий/файлов (или используем значения по умолчанию)
+        List<string> ignoreList = FileSource.GetIgnoreList();
 
-            List<string> files = Directory.GetFiles(sourcePath, extensionPattern, SearchOption.AllDirectories).ToList();
+        // Собираем файлы по каждому расширению
+        var files = GetFiles.GetFilteredFiles(sourcePath, extensions, ignoreList)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToList();
 
-            files.RemoveAll(file => ignoreList.Exists(ignoreItem => file.Contains(ignoreItem)));
-
-            using (StreamWriter streamWriter = new StreamWriter(targetPath))
-            {
-                ReportWriter reportWriter = new ReportWriter(streamWriter);
-                reportWriter.WriteFiles(files);
-            }
-
+        if (TryWriteReport(files, sourcePath, targetPath, opts.EmptyLineMode))
+        {
+            Console.WriteLine("Операция завершена успешно");
             return 0;
         }
+        return -1;
+    }
 
-        private static IEnumerable<string> GetIgnoreList()
+    public static bool TryWriteReport(List<string> files, string sourcePath, string targetPath, EmptyLineMode emptyLineMode)
+    {
+        // Генерируются два файла: например, один с расширением .docx и один с оригинальным расширением targetPath
+        var docxPath = Path.ChangeExtension(targetPath, "docx");
+
+        // Если файлы заблокированы, ждать разблокировки
+        UnlockFileIfNeed(docxPath);
+        UnlockFileIfNeed(targetPath);
+
+        // Пример записи в файл docx (здесь вызов кастомного класса записи)
+        using (FileStream fileStream = new FileStream(docxPath, FileMode.OpenOrCreate))
         {
-            return new List<string>()
-            {
-                "Debug",
-                "Properties",
-                "Designer",
-                "AssemblyAttributes"
-            };
+            DoxcWriter doxcWriter = new DoxcWriter(fileStream);
+            doxcWriter.WriteFiles(sourcePath, files, emptyLineMode);
         }
 
+        ODTWriter odtWriter = new ODTWriter(targetPath);
+        odtWriter.WriteFiles(sourcePath, files);
+
+        return true;
+    }
+
+
+    // Метод для проверки блокировки файлаф
+    private static void UnlockFileIfNeed(string path)
+    {
+        while (true)
+        {
+            if (FileOperations.IsFileLocked(path) == false)
+            {
+                break;
+            }
+            Console.WriteLine($"{path} заблокирован другим приложением. Пожалуйста, разблокируйте его и нажмите любую клавишу...");
+            Console.ReadKey();
+        }
     }
 }
+
